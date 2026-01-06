@@ -7,7 +7,7 @@ Repository notes
 - Python version: 3.12.8 (from .python-version).
 
 Project structure (big picture)
-- main.py: E-paper display loop for Milan transit arrivals. Uses placeholder API data (get_arrivals returns static entries) and Pillow to render an 800x480 monochrome image. If the Waveshare driver is available (`waveshare_epd.epd7in5_V2`), it pushes the buffer to the 7.5" display and then sleeps; otherwise it saves `test_display.png` for local testing. The loop refreshes every 120 seconds; stop/location constants are at the top.
+- main.py: E-paper display loop for Milan transit arrivals. Arrivals now come from GTFS static `data/stop_times.txt` via `get_arrivals_for_stops`, grouped by stop/direzione with two next arrivals per stop. Pillow renders an 800x480 mono image; with `waveshare_epd.epd7in5_V2` it drives the 7.5" panel, otherwise it saves `test_display.png`. Loop refresh every 120s; stop/location constants at the top.
 - requirements.in / requirements.txt: Requests + Pillow; the display driver `waveshare-epd` is required at runtime on the device but is not pinned here.
 
 Common commands
@@ -23,5 +23,8 @@ Common commands
 - Run display loop (blocking refresh every 120s): `python main.py`
 
 Operational notes
-- `main.py` currently uses static arrival data; swap `get_arrivals` (and `get_nearby_stops` if needed) with real ATM/Muoversi API calls and keys when available.
+- Arrivals: uses GTFS static `data/stop_times.txt`; `get_arrivals_for_stops` pulls all stops from `get_nearby_stops` and takes the two soonest per stop. Update GTFS data if schedules change.
 - Ensure the target system has fonts at `/usr/share/fonts/truetype/dejavu/`; otherwise Pillow falls back to default fonts.
+- `test_display.png` can be generated via `python - <<'PY' ... create_display_image ... PY` for local preview; file is gitignored.
+- `.gitignore` excludes venv, pycache, pyc, `test_display.png`, `data/`, `requirements.txt`.
+- If you switch to live APIs, replace GTFS reads in `get_arrivals_for_stops` and adapt grouping if needed.
