@@ -7,122 +7,220 @@ Display e-paper per trasporti pubblici Milano - Piazza Ferravilla
 Richiede: Raspberry Pi + Waveshare 7.5” e-paper display
 """
 
-import csv
-import requests
+import io
+import shutil
 import time
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
+import logging
+from logging.handlers import RotatingFileHandler
+
+import requests
+import partridge as ptg
 from PIL import Image, ImageDraw, ImageFont
 
 # ===== CONFIGURAZIONE =====
 
-# Coordinate Piazza Ferravilla, Milano
+UPDATE_INTERVAL = 120  # Aggiorna ogni N secondi
+GTFS_URL = "https://dati.comune.milano.it/gtfs.zip"
+GTFS_PATH = Path(__file__).resolve().parent / "data" / "gtfs"
+LOG_PATH = Path(__file__).resolve().parent / "atm_display.log"
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
-LATITUDE = 45.5016
-LONGITUDE = 9.1585
-RADIUS = 300  # metri di ricerca fermate
+handler = RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8")
+console_handler = logging.StreamHandler()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[handler, console_handler],
+)
+logger = logging.getLogger(__name__)
 
-# Aggiorna ogni N secondi
 
-UPDATE_INTERVAL = 120
-STOP_ID = "19259"  # stop_id presente in data/stop_times.txt
-STOP_TIMES_PATH = Path(__file__).resolve().parent / "data" / "stop_times.txt"
+def download_gtfs_data():
+    """
+    Scarica e estrae i dati GTFS dal portale open data di Milano.
+    """
+    logger.info("Download dati GTFS da %s...", GTFS_URL)
+
+    response = requests.get(GTFS_URL, timeout=60)
+    response.raise_for_status()
+
+    # Rimuovi directory esistente e ricrea
+    if GTFS_PATH.exists():
+        shutil.rmtree(GTFS_PATH)
+    GTFS_PATH.mkdir(parents=True, exist_ok=True)
+
+    # Estrai il contenuto dello zip
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        zf.extractall(GTFS_PATH)
+
+    logger.info("Dati GTFS estratti in %s", GTFS_PATH)
+
 
 # ===== FUNZIONI API =====
 
-def get_nearby_stops():
+def get_nearby_stops(feed, target_stops=None):
     """
-    Recupera fermate vicine usando API Muoversi Milano
-    Alternativa: usa GTFS statico o API ATM
+    Recupera fermate dal feed GTFS già caricato in memoria.
+    Restituisce solo le fermate elencate in target_stops.
     """
-    # Esempio con coordinate - adatta all’API che userai
-    url = "https://giromilano.atm.it/proxy.ashx"
+    if target_stops is None:
+        target_stops = [12422, 12423, 12424, 12425]
 
-
-    # Per ora uso dati di esempio - sostituisci con chiamata API reale
-    # Fermate comuni a Piazza Ferravilla:
-    stops = [
-        {"direzione": "Niguarda", "line": ["5"], "stop_id": "12422"},
-        {"direzione": "Ortica", "line": ["5"], "stop_id": "12423"},
-        {"direzione": "Lodi", "line": ["90"], "stop_id": "12424"},
-        {"direzione": "Lotto", "line": ["91"], "stop_id": "12425"},
-        {"direzione": "Fake1", "line": ["F1"], "stop_id": "19236"},
-        {"direzione": "Fake2", "line": ["F2"], "stop_id": "19279"}
-        # "12422";"Via B.Angelico, 1 prima di V.le Romagna";"5";9.22428124893046;45.4709402259963;"(45.4709402259963, 9.22428124893046)"
-        # "12423";"P.za Ferravilla, 2 prima di V.le Romagna";"5";9.22336580028576;45.4710498582134;"(45.4710498582134, 9.22336580028576)"
-        # "12424";V.le Romagna altezza P.za Ferravilla;"90";9.2236508585372;45.4712426610207;"(45.4712426610207, 9.2236508585372)"
-        # "12425";"V.le Romagna, 24 prima di L.go Rio De Janeiro";"91";9.22387370376705;45.4717519434216;"(45.4717519434216, 9.22387370376705)"
-    ]
-    return stops
-
-def get_arrivals_for_stops(stops):
-    """
-    Restituisce i prossimi arrivi per tutte le fermate fornite (GTFS statico).
-    Per ogni stop_id: massimo 2 arrivi più imminenti, mantenendo "direzione" e "line".
-    """
-    now = datetime.now()
-    stop_map = {str(s.get("stop_id")): s for s in stops}
-    arrivals_by_stop = {sid: [] for sid in stop_map}
+    target_stop_ids = [str(s) for s in target_stops]
 
     try:
-        with open(STOP_TIMES_PATH, newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                sid = row.get("stop_id")
-                if sid not in stop_map:
-                    continue
+        stops_df = feed.stops[feed.stops["stop_id"].isin(target_stop_ids)]
 
-                arrival_str = row.get("arrival_time", "")
-                try:
-                    h, m, s = map(int, arrival_str.split(":"))
-                except ValueError:
-                    continue
+        stops = []
+        for _, row in stops_df.iterrows():
+            stops.append({
+                "stop_id": row["stop_id"],
+                "stop_name": row.get("stop_name", ""),
+                "direzione": row.get("stop_name", ""),
+                "line": [],
+            })
+        return stops
 
-                arrival_dt = datetime.combine(now.date(), datetime.min.time()) + timedelta(hours=h, minutes=m, seconds=s)
-                if arrival_dt < now:
-                    arrival_dt += timedelta(days=1)
+    except Exception:
+        logger.exception("Errore recupero fermate")
+        return []
 
-                minutes = max(0, int((arrival_dt - now).total_seconds() // 60))
-                destination = row.get("stop_headsign") or "Destinazione non disponibile"
 
-                stop_info = stop_map[sid]
-                line_from_stop = stop_info.get("line") or stop_info.get("lines")
-                if isinstance(line_from_stop, list) and line_from_stop:
-                    line_label = line_from_stop[0]
-                else:
-                    line_label = line_from_stop or row.get("trip_id") or "Linea"
+def parse_gtfs_time(time_value, base_date):
+    """
+    Parses GTFS time (seconds since midnight as float) to datetime.
+    Handles times > 24h (next day service).
+    """
+    try:
+        if isinstance(time_value, (int, float)):
+            total_seconds = int(time_value)
+        else:
+            # Fallback for string format "HH:MM:SS"
+            h, m, s = map(int, str(time_value).split(":"))
+            total_seconds = h * 3600 + m * 60 + s
+    except (ValueError, TypeError):
+        return None
 
-                arrivals_by_stop[sid].append({
-                    "line": line_label,
-                    "direzione": stop_info.get("direzione"),
-                    "stop_id": sid,
-                    "destination": destination,
-                    "minutes": minutes
-                })
+    days_offset, remaining_seconds = divmod(total_seconds, 86400)
+    return datetime.combine(base_date, datetime.min.time()) + timedelta(days=days_offset, seconds=remaining_seconds)
 
-        results = []
-        for sid, items in arrivals_by_stop.items():
-            items.sort(key=lambda a: a["minutes"])
-            results.extend(items[:2])
+def filter_stop_times(feed, stops, service_ids_by_date):
+    """
+    Filtra i dati GTFS per le fermate specificate e li prepara per le query.
+    Eseguito una sola volta all'avvio per ridurre il dataset in memoria.
 
-        results.sort(key=lambda a: a["minutes"])
-        return results
+    Restituisce un DataFrame con stop_times già uniti a trips e routes.
+    """
+    import pandas as pd
 
-    except FileNotFoundError:
-        print(f"File stop_times non trovato: {STOP_TIMES_PATH}")
-    except Exception as e:
-        print(f"Errore recupero dati: {e}")
+    stop_map = {str(s.get("stop_id")): s for s in stops}
+    stop_ids = list(stop_map.keys())
 
-    return []
+    if not stop_ids:
+        return pd.DataFrame(), stop_map
 
-# Retro-compatibilità: alias che usa lo STOP_ID di default
+    try:
+        # Filter by today's service patterns
+        today = datetime.now().date()
+        if service_ids_by_date and today in service_ids_by_date:
+            service_ids = list(service_ids_by_date[today])
+            active_trips = feed.trips[feed.trips["service_id"].isin(service_ids)]
+            active_trip_ids = set(active_trips["trip_id"])
+            stop_times = feed.stop_times[
+                (feed.stop_times["stop_id"].isin(stop_ids)) &
+                (feed.stop_times["trip_id"].isin(active_trip_ids))
+            ]
+        else:
+            stop_times = feed.stop_times[feed.stop_times["stop_id"].isin(stop_ids)]
 
-def get_arrivals(stop_id=None, line=None):
-    stops = get_nearby_stops()
+        if stop_times.empty:
+            return pd.DataFrame(), stop_map
+
+        # Pre-merge con trips e routes (fatto una sola volta)
+        trips = feed.trips[["trip_id", "route_id", "trip_headsign", "direction_id"]]
+        routes = feed.routes[["route_id", "route_short_name", "route_long_name"]]
+
+        merged = stop_times.merge(trips, on="trip_id", how="left").merge(routes, on="route_id", how="left")
+
+        logger.info("Dataset filtrato: %d righe per %d fermate", len(merged), len(stop_ids))
+        return merged, stop_map
+
+    except Exception:
+        logger.exception("Errore filtraggio dati")
+        return pd.DataFrame(), stop_map
+
+
+def get_next_arrivals(stop_times_df, stop_map):
+    """
+    Interroga i dati pre-filtrati per trovare i prossimi 2 arrivi per linea/destinazione.
+    Eseguito ad ogni ciclo di aggiornamento.
+    """
+    import pandas as pd
+
+    if stop_times_df.empty:
+        return []
+
+    now = datetime.now()
+
+    arrivals_by_line = {}
+
+    for _, row in stop_times_df.iterrows():
+        sid = row["stop_id"]
+        arrival_dt = parse_gtfs_time(row.get("arrival_time", ""), now.date())
+        if not arrival_dt:
+            continue
+        if arrival_dt < now:
+            continue  # Skip past arrivals
+
+        minutes = int((arrival_dt - now).total_seconds() // 60)
+        if minutes > 120:
+            continue  # Don't list arrivals that far ahead
+
+        def get_str(val, default=""):
+            if pd.isna(val):
+                return default
+            return str(val) if val else default
+
+        destination = get_str(row.get("stop_headsign")) or get_str(row.get("trip_headsign")) or get_str(row.get("route_long_name")) or "Destinazione non disponibile"
+        line_label = get_str(row.get("route_short_name")) or get_str(row.get("route_id")) or "Linea"
+
+        stop_info = stop_map.get(sid, {})
+
+        arrival_entry = {
+            "line": line_label,
+            "direzione": stop_info.get("direzione", destination),
+            "stop_id": sid,
+            "destination": destination,
+            "minutes": minutes
+        }
+
+        # Group by line + destination
+        group_key = (line_label, destination)
+        if group_key not in arrivals_by_line:
+            arrivals_by_line[group_key] = []
+        arrivals_by_line[group_key].append(arrival_entry)
+
+    # Limit to next 2 arrivals per line+destination
+    results = []
+    for group_key, items in arrivals_by_line.items():
+        items.sort(key=lambda a: a["minutes"])
+        results.extend(items[:2])
+
+    results.sort(key=lambda a: a["minutes"])
+    return results
+# Retro-compatibilità: alias per uso semplificato
+
+def get_arrivals(feed, service_ids_by_date, stop_id=None):
+    stops = get_nearby_stops(feed)
     # Se viene passato un singolo stop_id, filtra la lista, altrimenti usa tutte le fermate
     if stop_id is not None:
         stops = [s for s in stops if str(s.get("stop_id")) == str(stop_id)] or stops
-    return get_arrivals_for_stops(stops)
+    stop_times_df, stop_map = filter_stop_times(feed, stops, service_ids_by_date)
+    return get_next_arrivals(stop_times_df, stop_map)
 
 
 # ===== FUNZIONI DISPLAY =====
@@ -158,67 +256,62 @@ def create_display_image(arrivals):
     # Linea separatrice
     draw.line([(20, 80), (width-20, 80)], fill=0, width=3)
 
-    # Raggruppa arrivi per stop/direzione
+    # Raggruppa arrivi per line/destination
     y_offset = 110
     line_height = 60
-    header_height = 45
 
     if not arrivals:
         draw.text((20, y_offset), "Nessun dato disponibile", font=font_medium, fill=0)
     else:
+        # Group arrivals by (line, destination)
         groups = {}
         for arrival in arrivals:
-            key = (arrival.get("stop_id"), arrival.get("direzione") or arrival.get("destination"))
+            key = (arrival.get("line"), arrival.get("destination"))
             groups.setdefault(key, []).append(arrival)
 
-        # ordina gruppi per arrivo più vicino
+        # Sort groups by soonest arrival
         ordered_groups = sorted(groups.items(), key=lambda kv: min(a["minutes"] for a in kv[1]))
 
-        for (stop_id, direzione), items in ordered_groups:
-            # Header per stop/direzione
-            header_text = f"{direzione or 'Stop'} ({stop_id})"
-            draw.text((20, y_offset), header_text, font=font_medium, fill=0)
-            y_offset += header_height
-
-            items.sort(key=lambda a: a["minutes"])
-            for arrival in items:
-                if y_offset > height - 70:
-                    break
-
-                # Numero linea (con cerchio)
-                circle_x, circle_y = 40, y_offset + 15
-                circle_radius = 22
-                draw.ellipse([circle_x-circle_radius, circle_y-circle_radius,
-                            circle_x+circle_radius, circle_y+circle_radius],
-                            outline=0, width=3)
-
-                # Testo linea
-                line_text = arrival['line']
-                bbox = draw.textbbox((0, 0), line_text, font=font_medium)
-                text_width = bbox[2] - bbox[0]
-                draw.text((circle_x - text_width//2, circle_y-16),
-                        line_text, font=font_medium, fill=0)
-
-                # Destinazione
-                draw.text((100, y_offset), arrival['destination'],
-                        font=font_medium, fill=0)
-
-                # Tempo arrivo
-                minutes = arrival['minutes']
-                if minutes == 0:
-                    time_text = "In arrivo"
-                elif minutes == 1:
-                    time_text = "1 min"
-                else:
-                    time_text = f"{minutes} min"
-
-                draw.text((width-200, y_offset), time_text,
-                        font=font_large, fill=0)
-
-                y_offset += line_height
-
+        for (line, destination), items in ordered_groups:
             if y_offset > height - 70:
                 break
+
+            items.sort(key=lambda a: a["minutes"])
+
+            # Line number (with circle)
+            circle_x, circle_y = 40, y_offset + 15
+            circle_radius = 22
+            draw.ellipse([circle_x-circle_radius, circle_y-circle_radius,
+                        circle_x+circle_radius, circle_y+circle_radius],
+                        outline=0, width=3)
+
+            # Line text
+            line_text = str(line)
+            bbox = draw.textbbox((0, 0), line_text, font=font_medium)
+            text_width = bbox[2] - bbox[0]
+            draw.text((circle_x - text_width//2, circle_y-16),
+                    line_text, font=font_medium, fill=0)
+
+            # Destination
+            draw.text((100, y_offset), destination, font=font_medium, fill=0)
+
+            # Arrival times (up to 2 in columns)
+            def format_minutes(minutes):
+                if minutes == 0:
+                    return "In arrivo"
+                elif minutes == 1:
+                    return "1 min"
+                else:
+                    return f"{minutes} min"
+
+            time1 = format_minutes(items[0]["minutes"])
+            draw.text((width-280, y_offset), time1, font=font_large, fill=0)
+
+            if len(items) > 1:
+                time2 = format_minutes(items[1]["minutes"])
+                draw.text((width-130, y_offset), time2, font=font_large, fill=0)
+
+            y_offset += line_height
 
     # Footer
     draw.line([(20, height-60), (width-20, height-60)], fill=0, width=2)
@@ -248,50 +341,102 @@ def update_display(image):
         # Sleep mode per risparmiare energia
         epd.sleep()
 
-        print(f"Display aggiornato: {datetime.now()}")
+        logger.info("Display aggiornato: %s", datetime.now())
 
     except ImportError:
-        print("Libreria waveshare_epd non trovata. Salvo immagine per test.")
+        logger.warning("Libreria waveshare_epd non trovata. Salvo immagine per test.")
         image.save('test_display.png')
-    except Exception as e:
-        print(f"Errore aggiornamento display: {e}")
+    except Exception:
+        logger.exception("Errore aggiornamento display")
 
 # ===== MAIN LOOP =====
+
+def load_gtfs_data():
+    """
+    Carica il feed GTFS e prepara i dati filtrati per le fermate.
+    Restituisce (feed, service_ids_by_date, stops, stop_times_df, stop_map).
+    """
+    logger.info("Caricamento feed GTFS...")
+    feed = ptg.load_feed(str(GTFS_PATH))
+    service_ids_by_date = ptg.read_service_ids_by_date(str(GTFS_PATH))
+    logger.info("Feed GTFS caricato: %d fermate, %d stop_times", len(feed.stops), len(feed.stop_times))
+
+    stops = get_nearby_stops(feed)
+    logger.info("Fermate monitorate: %d", len(stops))
+
+    logger.info("Filtraggio dati per fermate selezionate...")
+    stop_times_df, stop_map = filter_stop_times(feed, stops, service_ids_by_date)
+
+    return feed, service_ids_by_date, stops, stop_times_df, stop_map
+
+
+def should_update_gtfs(last_download_date):
+    """
+    Controlla se è il momento di aggiornare i dati GTFS.
+    Aggiorna ogni venerdì dopo le 23:55, una sola volta.
+    """
+    now = datetime.now()
+    is_friday = now.weekday() == 4
+    is_after_2355 = now.hour == 23 and now.minute >= 55
+    not_downloaded_today = last_download_date != now.date()
+
+    return is_friday and is_after_2355 and not_downloaded_today
+
 
 def main():
     """
     Loop principale
     """
-    print("=== Display Trasporti Milano - Piazza Ferravilla ===")
-    print(f"Avvio alle {datetime.now()}")
+    logger.info("=== Display Trasporti Milano - Piazza Ferravilla ===")
+    logger.info("Avvio alle %s", datetime.now())
 
+    # Scarica dati GTFS se non esistono
+    if not GTFS_PATH.exists() or not any(GTFS_PATH.iterdir()):
+        download_gtfs_data()
+        last_download_date = datetime.now().date()
+    else:
+        logger.info("Dati GTFS esistenti trovati in %s", GTFS_PATH)
+        last_download_date = None  # Non sappiamo quando sono stati scaricati
+
+    # Carica feed GTFS in memoria
+    feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
 
     while True:
         try:
-            # Recupera dati arrivi
-            print("Recupero dati arrivi...")
-            stops = get_nearby_stops()
-            arrivals = get_arrivals_for_stops(stops)
+            # Controlla se è ora di aggiornare i dati GTFS (venerdì dopo 23:55)
+            if should_update_gtfs(last_download_date):
+                logger.info("=== Aggiornamento settimanale GTFS ===")
+                download_gtfs_data()
+                last_download_date = datetime.now().date()
+                feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
+
+            # Interroga i dati pre-filtrati (operazione leggera)
+            logger.info("Recupero dati arrivi...")
+            arrivals = get_next_arrivals(stop_times_df, stop_map)
+
+            # Stampa arrivi
+            logger.info("Arrivi alle %s:", datetime.now().strftime('%H:%M'))
+            for a in arrivals:
+                logger.info("  Linea %3s → %-40s %3s min", a['line'], a['destination'], a['minutes'])
 
             # Crea immagine
-            print("Creazione immagine display...")
+            logger.info("Creazione immagine display...")
             image = create_display_image(arrivals)
-            
-            # Aggiorna display
-            print("Aggiornamento display...")
-            update_display(image)
-            
-            # Attendi prima del prossimo aggiornamento
-            print(f"Prossimo aggiornamento tra {UPDATE_INTERVAL} secondi\n")
-            time.sleep(UPDATE_INTERVAL)
-            
-        except KeyboardInterrupt:
-            print("\nUscita...")
-            break
-        except Exception as e:
-            print(f"Errore nel loop principale: {e}")
-            time.sleep(60)  # Riprova tra 1 minuto in caso di errore
 
+            # Aggiorna display
+            logger.info("Aggiornamento display...")
+            update_display(image)
+
+            # Attendi prima del prossimo aggiornamento
+            logger.info("Prossimo aggiornamento tra %s secondi", UPDATE_INTERVAL)
+            time.sleep(UPDATE_INTERVAL)
+
+        except KeyboardInterrupt:
+            logger.info("Uscita...")
+            break
+        except Exception:
+            logger.exception("Errore nel loop principale")
+            time.sleep(60)  # Riprova tra 1 minuto in caso di errore
 
 if __name__ == "__main__":
     main()
