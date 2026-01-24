@@ -9,12 +9,14 @@ Richiede: Raspberry Pi + Waveshare 7.5” e-paper display
 
 import io
 import shutil
+import subprocess
 import time
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
+import re
 
 import requests
 import partridge as ptg
@@ -28,6 +30,7 @@ GTFS_PATH = Path(__file__).resolve().parent / "data" / "gtfs"
 LOG_PATH = Path(__file__).resolve().parent / "atm_display.log"
 LOG_MAX_BYTES = 10 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
+TARGET_STOPS = [12422, 12423, 12424, 12425]
 
 handler = RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8")
 console_handler = logging.StreamHandler()
@@ -60,6 +63,58 @@ def download_gtfs_data():
     logger.info("Dati GTFS estratti in %s", GTFS_PATH)
 
 
+def filter_stop_times_file(stop_times_path: Path, target_stops):
+    """
+    Usa grep per ridurre stop_times.txt alle sole righe per le fermate target.
+    Restituisce il path (eventualmente filtrato) da usare nel feed.
+    """
+    if not stop_times_path.exists():
+        logger.warning("stop_times.txt non trovato in %s", stop_times_path.parent)
+        return stop_times_path
+
+    target_ids = [str(s) for s in target_stops]
+    if not target_ids:
+        logger.info("Nessuna fermata target: nessun filtro applicato")
+        return stop_times_path
+
+    header = ""
+    try:
+        with stop_times_path.open("r", encoding="utf-8") as src:
+            header = src.readline()
+    except Exception:
+        logger.exception("Impossibile leggere stop_times.txt per estrarre l'header")
+        return stop_times_path
+
+    filtered_path = stop_times_path.with_name("stop_times.filtered.txt")
+    pattern = rf"^[^,]*,[^,]*,[^,]*,({'|'.join(map(re.escape, target_ids))})(,|$)"
+
+    try:
+        with filtered_path.open("w", encoding="utf-8") as dest:
+            if header:
+                dest.write(header)
+            result = subprocess.run(
+                ["grep", "-E", pattern, str(stop_times_path)],
+                stdout=dest,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+        if result.returncode not in (0, 1):
+            logger.warning("grep su stop_times.txt fallito (code %s): %s", result.returncode, result.stderr.strip())
+            filtered_path.unlink(missing_ok=True)
+            return stop_times_path
+
+        shutil.move(filtered_path, stop_times_path)
+        logger.info("stop_times.txt filtrato con grep per %d fermate target", len(target_ids))
+        return stop_times_path
+
+    except Exception:
+        logger.exception("Errore durante il filtraggio di stop_times.txt")
+        filtered_path.unlink(missing_ok=True)
+        return stop_times_path
+
+
 # ===== FUNZIONI API =====
 
 def get_nearby_stops(feed, target_stops=None):
@@ -68,7 +123,7 @@ def get_nearby_stops(feed, target_stops=None):
     Restituisce solo le fermate elencate in target_stops.
     """
     if target_stops is None:
-        target_stops = [12422, 12423, 12424, 12425]
+        target_stops = TARGET_STOPS
 
     target_stop_ids = [str(s) for s in target_stops]
 
@@ -242,9 +297,12 @@ def create_display_image(arrivals):
         font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 32)
         font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
     except:
-        font_large = ImageFont.load_default()
-        font_medium = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+        font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
+        font_medium = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 20)
+        font_small = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 16)
+        # font_large = ImageFont.load_default()
+        # font_medium = ImageFont.load_default()
+        # font_small = ImageFont.load_default()
 
     # Header
     draw.text((20, 20), "PIAZZA FERRAVILLA", font=font_large, fill=0)
@@ -357,6 +415,7 @@ def load_gtfs_data():
     Restituisce (feed, service_ids_by_date, stops, stop_times_df, stop_map).
     """
     logger.info("Caricamento feed GTFS...")
+    filter_stop_times_file(GTFS_PATH / "stop_times.txt", TARGET_STOPS)
     feed = ptg.load_feed(str(GTFS_PATH))
     service_ids_by_date = ptg.read_service_ids_by_date(str(GTFS_PATH))
     logger.info("Feed GTFS caricato: %d fermate, %d stop_times", len(feed.stops), len(feed.stop_times))
@@ -368,6 +427,7 @@ def load_gtfs_data():
     stop_times_df, stop_map = filter_stop_times(feed, stops, service_ids_by_date)
 
     return feed, service_ids_by_date, stops, stop_times_df, stop_map
+
 
 
 def should_update_gtfs(last_download_date):
