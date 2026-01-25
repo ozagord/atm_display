@@ -41,6 +41,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Stato display Waveshare
+_epd_device = None
+_update_counter = 0
+
 
 def download_gtfs_data():
     """
@@ -409,28 +413,39 @@ def create_display_image(arrivals):
 
 
 
+def _get_epd():
+    """Inizializza e restituisce l'istanza EPD (singleton)."""
+    import sys
+    sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib")
+
+    global _epd_device
+    if _epd_device is None:
+        from waveshare_epd import epd7in5_V2
+        _epd_device = epd7in5_V2.EPD()
+        _epd_device.init()
+        logger.info("Display EPD inizializzato")
+    return _epd_device
+
+
 def update_display(image):
     """
-    Aggiorna il display e-paper
-    Richiede libreria waveshare_epd installata
+    Aggiorna il display e-paper.
+    Init eseguito una sola volta; Clear ogni 10 aggiornamenti.
     """
-    import sys
-    sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib") 
+    global _update_counter
     try:
-        # Importa driver Waveshare (installa con: pip install waveshare-epd)
-        from waveshare_epd import epd7in5_V2
-
-        epd = epd7in5_V2.EPD()
+        epd = _get_epd()
         epd.init()
-        epd.Clear()
+    
+        # Pulizia ogni 10 aggiornamenti (incluso il primo)
+        if _update_counter % 10 == 0:
+            epd.Clear()
 
-        # Converti e visualizza immagine
         epd.display(epd.getbuffer(image))
-
-        # Sleep mode per risparmiare energia
         epd.sleep()
 
-        logger.info("Display aggiornato: %s", datetime.now())
+        _update_counter += 1
+        logger.info("Display aggiornato (%d)", _update_counter)
 
     except ImportError:
         logger.warning("Libreria waveshare_epd non trovata. Salvo immagine per test.")
@@ -491,13 +506,14 @@ def main():
 
     # Carica feed GTFS in memoria
     feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
-
+    global _update_counter
     while True:
         try:
             # Controlla se è ora di aggiornare i dati GTFS (venerdì dopo 23:55)
             if should_update_gtfs(last_download_date):
                 logger.info("=== Aggiornamento settimanale GTFS ===")
                 download_gtfs_data()
+                _update_counter = 0
                 last_download_date = datetime.now().date()
                 feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
 
