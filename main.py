@@ -392,11 +392,11 @@ def create_display_image(arrivals):
                     return f"{minutes} min"
 
             time1 = format_minutes(items[0]["minutes"])
-            draw.text((width-280, y_offset), time1, font=font_large, fill=0)
+            draw.text((width-280, y_offset), time1, font=font_medium, fill=0)
 
             if len(items) > 1:
                 time2 = format_minutes(items[1]["minutes"])
-                draw.text((width-130, y_offset), time2, font=font_large, fill=0)
+                draw.text((width-130, y_offset), time2, font=font_medium, fill=0)
 
             y_offset += line_height
 
@@ -414,6 +414,8 @@ def update_display(image):
     Aggiorna il display e-paper
     Richiede libreria waveshare_epd installata
     """
+    import sys
+    sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib") 
     try:
         # Importa driver Waveshare (installa con: pip install waveshare-epd)
         from waveshare_epd import epd7in5_V2
