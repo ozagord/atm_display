@@ -30,7 +30,7 @@ GTFS_PATH = Path(__file__).resolve().parent / "data" / "gtfs"
 LOG_PATH = Path(__file__).resolve().parent / "atm_display.log"
 LOG_MAX_BYTES = 10 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
-TARGET_STOPS = [12422, 12423, 12424, 12425]
+TARGET_STOPS = [12422, 12423, 12424, 12425, 12170]
 
 handler = RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8")
 console_handler = logging.StreamHandler()
@@ -326,8 +326,8 @@ def create_display_image(arrivals):
 
     # Font (usa font di sistema o scarica Roboto/Arial)
     try:
-        font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 40)
-        font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 32)
+        font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 36)
+        font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 30)
         font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
     except:
         font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
@@ -338,7 +338,7 @@ def create_display_image(arrivals):
         # font_small = ImageFont.load_default()
 
     # Header
-    draw.text((20, 20), "PIAZZA FERRAVILLA", font=font_large, fill=0)
+    draw.text((20, 20), "PROSSIME PARTENZE", font=font_large, fill=0)
 
     # Ora corrente
     now = datetime.now().strftime("%H:%M")
@@ -539,7 +539,11 @@ def main():
             time.sleep(UPDATE_INTERVAL)
 
         except KeyboardInterrupt:
-            logger.info("Uscita...")
+            logger.info("Uscita... pulisco il display")
+            epd = _get_epd()
+            epd.init()
+            epd.Clear() # Pulisce prima di uscire
+            epd.sleep()
             break
         except Exception:
             logger.exception("Errore nel loop principale")
