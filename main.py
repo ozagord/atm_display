@@ -326,9 +326,9 @@ def create_display_image(arrivals):
 
     # Font (usa font di sistema o scarica Roboto/Arial)
     try:
-        font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 36)
-        font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 30)
-        font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+        font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 30)
+        font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+        font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
     except:
         font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
         font_medium = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 20)
