@@ -86,14 +86,40 @@ def filter_stop_times_file(stop_times_path: Path, target_stops):
         return stop_times_path
 
     filtered_path = stop_times_path.with_name("stop_times.filtered.txt")
-    pattern = rf"^[^,]*,[^,]*,[^,]*,({'|'.join(map(re.escape, target_ids))})(,|$)"
+    pattern = rf"\b({'|'.join(map(re.escape, target_ids))})\b"
 
     try:
-        with filtered_path.open("w", encoding="utf-8") as dest:
-            if header:
+        match_count = None
+        count_cmd = ["grep", "-E", "-c", pattern, str(stop_times_path)]
+        logger.info("Comando grep (conteggio): %s", " ".join(count_cmd))
+        count_result = subprocess.run(
+            count_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if count_result.returncode in (0, 1):
+            try:
+                match_count = int(count_result.stdout.strip() or 0)
+            except ValueError:
+                logger.warning("Impossibile parsare il conteggio delle righe grep: %r", count_result.stdout.strip())
+        else:
+            logger.warning("Conteggio grep su stop_times.txt fallito (code %s): %s", count_result.returncode, count_result.stderr.strip())
+
+        if match_count == 0:
+            logger.warning("grep su stop_times.txt ha trovato 0 righe: file lasciato intatto")
+            return stop_times_path
+
+        # Scrive prima l'header, poi appende le righe filtrate
+        if header:
+            with filtered_path.open("w", encoding="utf-8") as dest:
                 dest.write(header)
+        grep_cmd = ["grep", "-E", pattern, str(stop_times_path)]
+        logger.info("Comando grep (estrazione): %s", " ".join(grep_cmd))
+        with filtered_path.open("a", encoding="utf-8") as dest:
             result = subprocess.run(
-                ["grep", "-E", pattern, str(stop_times_path)],
+                grep_cmd,
                 stdout=dest,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -104,6 +130,9 @@ def filter_stop_times_file(stop_times_path: Path, target_stops):
             logger.warning("grep su stop_times.txt fallito (code %s): %s", result.returncode, result.stderr.strip())
             filtered_path.unlink(missing_ok=True)
             return stop_times_path
+
+        if match_count is not None:
+            logger.info("stop_times.txt: %d righe corrispondono alle fermate target", match_count)
 
         shutil.move(filtered_path, stop_times_path)
         logger.info("stop_times.txt filtrato con grep per %d fermate target", len(target_ids))
