@@ -45,6 +45,18 @@ logger = logging.getLogger(__name__)
 _epd_device = None
 _update_counter = 0
 
+# Font (usa font di sistema o scarica Roboto/Arial)
+try:
+    font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 30)
+    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+    font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+except:
+    font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
+    font_medium = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 20)
+    font_small = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 16)
+    # font_large = ImageFont.load_default()
+    # font_medium = ImageFont.load_default()
+    # font_small = ImageFont.load_default()
 
 def download_gtfs_data():
     """
@@ -324,19 +336,6 @@ def create_display_image(arrivals):
     image = Image.new('1', (width, height), 255)  # '1' = monocromatico
     draw = ImageDraw.Draw(image)
 
-    # Font (usa font di sistema o scarica Roboto/Arial)
-    try:
-        font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 30)
-        font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
-        font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
-    except:
-        font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
-        font_medium = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 20)
-        font_small = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 16)
-        # font_large = ImageFont.load_default()
-        # font_medium = ImageFont.load_default()
-        # font_small = ImageFont.load_default()
-
     # Header
     draw.text((20, 20), "PROSSIME PARTENZE", font=font_large, fill=0)
 
@@ -435,7 +434,7 @@ def update_display(image):
     global _update_counter
     try:
         epd = _get_epd()
-        epd.init()
+        epd.init_part()
     
         # Pulizia ogni 10 aggiornamenti (incluso il primo)
         if _update_counter % 10 == 0:
