@@ -47,9 +47,9 @@ _update_counter = 0
 
 # Font (usa font di sistema o scarica Roboto/Arial)
 try:
-    font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 30)
-    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
-    font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+    font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 26)
+    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 22)
+    font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 16)
 except:
     font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
     font_medium = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 20)
@@ -337,17 +337,17 @@ def create_display_image(arrivals):
     draw = ImageDraw.Draw(image)
 
     # Header
-    draw.text((20, 20), "PROSSIME PARTENZE", font=font_large, fill=0)
+    draw.text((20, 10), "PROSSIME PARTENZE", font=font_large, fill=0)
 
     # Ora corrente
     now = datetime.now().strftime("%H:%M")
-    draw.text((width-150, 20), now, font=font_medium, fill=0)
+    draw.text((width-150, 10), now, font=font_medium, fill=0)
 
     # Linea separatrice
-    draw.line([(20, 80), (width-20, 80)], fill=0, width=3)
+    draw.line([(20, 60), (width-20, 60)], fill=0, width=3)
 
     # Raggruppa arrivi per line/destination
-    y_offset = 110
+    y_offset = 95
     line_height = 60
 
     if not arrivals:
@@ -438,6 +438,7 @@ def update_display(image):
     
         # Pulizia ogni 10 aggiornamenti (incluso il primo)
         if _update_counter % 10 == 0:
+            epd.init()
             epd.Clear()
 
         epd.display(epd.getbuffer(image))
