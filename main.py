@@ -48,7 +48,7 @@ _update_counter = 0
 # Font (usa font di sistema o scarica Roboto/Arial)
 try:
     font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 26)
-    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 22)
+    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 22)
     font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 16)
 except:
     font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
@@ -404,8 +404,8 @@ def create_display_image(arrivals):
             y_offset += line_height
 
     # Footer
-    draw.line([(20, height-60), (width-20, height-60)], fill=0, width=2)
-    draw.text((20, height-45), "Aggiornamento automatico ogni 2 minuti",
+    draw.line([(20, height-40), (width-20, height-40)], fill=0, width=2)
+    draw.text((20, height-30), "Aggiornamento automatico ogni 2 minuti",
             font=font_small, fill=0)
 
     return image
