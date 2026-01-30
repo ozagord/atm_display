@@ -443,7 +443,7 @@ def update_display(image):
             epd.display(epd.getbuffer(image))
         else:
             epd.init_part()
-            epd.display_Partial(epd.getbuffer(image))
+            epd.display_Partial(epd.getbuffer(image), 0, 0, epd.width, epd.height)
         epd.sleep()
 
         _update_counter += 1
