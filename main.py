@@ -421,7 +421,8 @@ def _get_epd():
     if _epd_device is None:
         from waveshare_epd import epd7in5_V2
         _epd_device = epd7in5_V2.EPD()
-        _epd_device.init()
+        # _epd_device.init()
+        # _epd_device.Clear()
         logger.info("Display EPD inizializzato")
     return _epd_device
 
@@ -434,14 +435,15 @@ def update_display(image):
     global _update_counter
     try:
         epd = _get_epd()
-        epd.init_part()
     
         # Pulizia ogni 10 aggiornamenti (incluso il primo)
         if _update_counter % 10 == 0:
             epd.init()
             epd.Clear()
-
-        epd.display(epd.getbuffer(image))
+            epd.display(epd.getbuffer(image))
+        else:
+            epd.init_part()
+            epd.display_Partial(epd.getbuffer(image))
         epd.sleep()
 
         _update_counter += 1
