@@ -48,7 +48,7 @@ _update_counter = 0
 # Font (usa font di sistema o scarica Roboto/Arial)
 try:
     font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 26)
-    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 22)
+    font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 22)
     font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 16)
 except:
     font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
@@ -344,10 +344,10 @@ def create_display_image(arrivals):
     draw.text((width-150, 10), now, font=font_medium, fill=0)
 
     # Linea separatrice
-    draw.line([(20, 60), (width-20, 60)], fill=0, width=3)
+    draw.line([(20, 50), (width-20, 50)], fill=0, width=3)
 
     # Raggruppa arrivi per line/destination
-    y_offset = 95
+    y_offset = 85
     line_height = 60
 
     if not arrivals:
@@ -376,10 +376,10 @@ def create_display_image(arrivals):
                         outline=0, width=3)
 
             # Line text
-            line_text = str(line)
+            line_text = " ".join([s.capitalize() for s in str(line).split()])
             bbox = draw.textbbox((0, 0), line_text, font=font_medium)
             text_width = bbox[2] - bbox[0]
-            draw.text((circle_x - text_width//2, circle_y-16),
+            draw.text((circle_x - text_width//2, circle_y-11),
                     line_text, font=font_medium, fill=0)
 
             # Destination
