@@ -376,13 +376,14 @@ def create_display_image(arrivals):
                         outline=0, width=3)
 
             # Line text
-            line_text = " ".join([s.capitalize() for s in str(line).split()])
+            line_text = str(line)
             bbox = draw.textbbox((0, 0), line_text, font=font_medium)
             text_width = bbox[2] - bbox[0]
             draw.text((circle_x - text_width//2, circle_y-11),
                     line_text, font=font_medium, fill=0)
 
             # Destination
+            destination = " ".join([s.capitalize() for s in destination.split()])
             draw.text((100, y_offset), destination, font=font_medium, fill=0)
 
             # Arrival times (up to 2 in columns)
