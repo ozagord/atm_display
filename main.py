@@ -50,7 +50,7 @@ try:
     font_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 26)
     font_medium = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 22)
     font_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 16)
-except:
+except OSError:
     font_large = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma Bold.ttf', 24)
     font_medium = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 20)
     font_small = ImageFont.truetype('/System/Library/Fonts/Supplemental/Tahoma.ttf', 16)
@@ -412,7 +412,6 @@ def create_display_image(arrivals):
     return image
 
 
-
 def _get_epd():
     """Inizializza e restituisce l'istanza EPD (singleton)."""
     import sys
@@ -420,7 +419,7 @@ def _get_epd():
 
     global _epd_device
     if _epd_device is None:
-        from waveshare_epd import epd7in5_V2
+        from waveshare_epd import epd7in5_V2 # type: ignore
         _epd_device = epd7in5_V2.EPD()
         # _epd_device.init()
         # _epd_device.Clear()
@@ -441,10 +440,10 @@ def update_display(image):
         if _update_counter % 10 == 0:
             epd.init()
             epd.Clear()
-            epd.display(epd.getbuffer(image))
-        else:
-            epd.init_part()
-            epd.display_Partial(epd.getbuffer(image), 0, 0, epd.width, epd.height)
+            # epd.display(epd.getbuffer(image))
+        # else:
+        epd.init_part()
+        epd.display_Partial(epd.getbuffer(image), 0, 0, epd.width, epd.height)
         epd.sleep()
 
         _update_counter += 1
