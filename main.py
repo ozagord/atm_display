@@ -14,10 +14,12 @@ import time
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
+import gc
 import logging
 from logging.handlers import RotatingFileHandler
 import re
 
+import pandas as pd
 import requests
 import partridge as ptg
 from PIL import Image, ImageDraw, ImageFont
@@ -40,10 +42,6 @@ logging.basicConfig(
     handlers=[handler, console_handler],
 )
 logger = logging.getLogger(__name__)
-
-# Stato display Waveshare
-_epd_device = None
-_update_counter = 0
 
 # Font (usa font di sistema o scarica Roboto/Arial)
 try:
@@ -215,8 +213,6 @@ def filter_stop_times(feed, stops, service_ids_by_date):
 
     Restituisce un DataFrame con stop_times già uniti a trips e routes.
     """
-    import pandas as pd
-
     stop_map = {str(s.get("stop_id")): s for s in stops}
     stop_ids = list(stop_map.keys())
 
@@ -259,8 +255,6 @@ def get_next_arrivals(stop_times_df, stop_map):
     Interroga i dati pre-filtrati per trovare i prossimi 2 arrivi per linea/destinazione.
     Eseguito ad ogni ciclo di aggiornamento.
     """
-    import pandas as pd
-
     if stop_times_df.empty:
         return []
 
@@ -412,48 +406,57 @@ def create_display_image(arrivals):
     return image
 
 
-def _get_epd():
-    """Inizializza e restituisce l'istanza EPD (singleton)."""
-    import sys
-    sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib")
-
-    global _epd_device
-    if _epd_device is None:
-        from waveshare_epd import epd7in5_V2 # type: ignore
-        _epd_device = epd7in5_V2.EPD()
-        # _epd_device.init()
-        # _epd_device.Clear()
-        logger.info("Display EPD inizializzato")
-    return _epd_device
-
-
-def update_display(image):
-    """
-    Aggiorna il display e-paper.
-    Init eseguito una sola volta; Clear ogni 10 aggiornamenti.
-    """
-    global _update_counter
-    try:
-        epd = _get_epd()
+class DisplayManager:
+    """Gestisce il display e-paper e il suo stato."""
     
-        # Pulizia ogni 10 aggiornamenti (incluso il primo)
-        if _update_counter % 10 == 0:
-            epd.init()
-            epd.Clear()
-            # epd.display(epd.getbuffer(image))
-        # else:
-        epd.init_part()
-        epd.display_Partial(epd.getbuffer(image), 0, 0, epd.width, epd.height)
-        epd.sleep()
+    def __init__(self):
+        self.epd = None
+        self.update_counter = 0
 
-        _update_counter += 1
-        logger.info("Display aggiornato (%d)", _update_counter)
+    def initialize(self):
+        """Inizializza l'istanza EPD."""
+        import sys
+        sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib")
+        try:
+            from waveshare_epd import epd7in5_V2 # type: ignore
+            self.epd = epd7in5_V2.EPD()
+            logger.info("Display EPD inizializzato")
+        except ImportError:
+            logger.warning("Libreria waveshare_epd non trovata. Salvo su file locale per test.")
 
-    except ImportError:
-        logger.warning("Libreria waveshare_epd non trovata. Salvo immagine per test.")
-        image.save('test_display.png')
-    except Exception:
-        logger.exception("Errore aggiornamento display")
+    def update(self, image):
+        """Aggiorna il display e-paper e gestisce il refresh completo."""
+        try:
+            if self.epd is None:
+                image.save('test_display.png')
+                self.update_counter += 1
+                logger.info("Display dummy aggiornato (%d)", self.update_counter)
+                return
+
+            # Pulizia ogni 10 aggiornamenti (incluso il primo)
+            if self.update_counter % 10 == 0:
+                self.epd.init()
+                self.epd.Clear()
+
+            self.epd.init_part()
+            self.epd.display_Partial(self.epd.getbuffer(image), 0, 0, self.epd.width, self.epd.height)
+            self.epd.sleep()
+
+            self.update_counter += 1
+            logger.info("Display aggiornato (%d)", self.update_counter)
+
+        except Exception:
+            logger.exception("Errore aggiornamento display")
+
+    def reset_counter(self):
+        self.update_counter = 0
+
+    def cleanup(self):
+        """Pulisce il display alla chiusura del programma"""
+        if self.epd is not None:
+            self.epd.init()
+            self.epd.Clear()
+            self.epd.sleep()
 
 # ===== MAIN LOOP =====
 
@@ -508,16 +511,28 @@ def main():
 
     # Carica feed GTFS in memoria
     feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
-    global _update_counter
+    
+    # Rilascia la memoria occupata dal feed
+    del feed
+    gc.collect()
+
+    # Setup del display
+    display = DisplayManager()
+    display.initialize()
+
     while True:
         try:
             # Controlla se è ora di aggiornare i dati GTFS (venerdì dopo 23:55)
             if should_update_gtfs(last_download_date):
                 logger.info("=== Aggiornamento settimanale GTFS ===")
                 download_gtfs_data()
-                _update_counter = 0
+                display.reset_counter()
                 last_download_date = datetime.now().date()
                 feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
+                
+                # Rilascia la memoria occupata dal feed
+                del feed
+                gc.collect()
 
             # Interroga i dati pre-filtrati (operazione leggera)
             logger.info("Recupero dati arrivi...")
@@ -534,7 +549,7 @@ def main():
 
             # Aggiorna display
             logger.info("Aggiornamento display...")
-            update_display(image)
+            display.update(image)
 
             # Attendi prima del prossimo aggiornamento
             logger.info("Prossimo aggiornamento tra %s secondi", UPDATE_INTERVAL)
@@ -542,10 +557,7 @@ def main():
 
         except KeyboardInterrupt:
             logger.info("Uscita... pulisco il display")
-            epd = _get_epd()
-            epd.init()
-            epd.Clear() # Pulisce prima di uscire
-            epd.sleep()
+            display.cleanup()
             break
         except Exception:
             logger.exception("Errore nel loop principale")
