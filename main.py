@@ -62,7 +62,10 @@ def download_gtfs_data():
     """
     logger.info("Download dati GTFS da %s...", GTFS_URL)
 
-    response = requests.get(GTFS_URL, timeout=60)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+    response = requests.get(GTFS_URL, headers=headers, timeout=60)
     response.raise_for_status()
 
     # Rimuovi directory esistente e ricrea
