@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import time
 import zipfile
+import signal
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 import gc
@@ -68,14 +70,23 @@ def download_gtfs_data():
     response = requests.get(GTFS_URL, headers=headers, timeout=60)
     response.raise_for_status()
 
-    # Rimuovi directory esistente e ricrea
+    temp_path = GTFS_PATH.with_name(GTFS_PATH.name + "_temp")
+    if temp_path.exists():
+        shutil.rmtree(temp_path)
+    temp_path.mkdir(parents=True, exist_ok=True)
+
+    # Estrai il contenuto dello zip in un percorso temporaneo
+    try:
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+            zf.extractall(temp_path)
+    except Exception as e:
+        shutil.rmtree(temp_path, ignore_errors=True)
+        raise e
+
+    # Sostituzione atomica
     if GTFS_PATH.exists():
         shutil.rmtree(GTFS_PATH)
-    GTFS_PATH.mkdir(parents=True, exist_ok=True)
-
-    # Estrai il contenuto dello zip
-    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
-        zf.extractall(GTFS_PATH)
+    temp_path.rename(GTFS_PATH)
 
     logger.info("Dati GTFS estratti in %s", GTFS_PATH)
 
@@ -265,9 +276,9 @@ def get_next_arrivals(stop_times_df, stop_map):
 
     arrivals_by_line = {}
 
-    for _, row in stop_times_df.iterrows():
-        sid = row["stop_id"]
-        arrival_dt = parse_gtfs_time(row.get("arrival_time", ""), now.date())
+    for row in stop_times_df.itertuples(index=False):
+        sid = getattr(row, "stop_id", None)
+        arrival_dt = parse_gtfs_time(getattr(row, "arrival_time", ""), now.date())
         if not arrival_dt:
             continue
         if arrival_dt < now:
@@ -282,8 +293,8 @@ def get_next_arrivals(stop_times_df, stop_map):
                 return default
             return str(val) if val else default
 
-        destination = get_str(row.get("stop_headsign")) or get_str(row.get("trip_headsign")) or get_str(row.get("route_long_name")) or "Destinazione non disponibile"
-        line_label = get_str(row.get("route_short_name")) or get_str(row.get("route_id")) or "Linea"
+        destination = get_str(getattr(row, "stop_headsign", "")) or get_str(getattr(row, "trip_headsign", "")) or get_str(getattr(row, "route_long_name", "")) or "Destinazione non disponibile"
+        line_label = get_str(getattr(row, "route_short_name", "")) or get_str(getattr(row, "route_id", "")) or "Linea"
 
         stop_info = stop_map.get(sid, {})
 
@@ -523,7 +534,17 @@ def main():
     display = DisplayManager()
     display.initialize()
 
-    while True:
+    shutdown_event = threading.Event()
+
+    def signal_handler(sig, frame):
+        sig_name = signal.Signals(sig).name if hasattr(signal, "Signals") else str(sig)
+        logger.info("Ricevuto segnale %s, avvio spegnimento controllato...", sig_name)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    while not shutdown_event.is_set():
         try:
             # Controlla se è ora di aggiornare i dati GTFS (venerdì dopo 23:55)
             if should_update_gtfs(last_download_date):
@@ -556,15 +577,18 @@ def main():
 
             # Attendi prima del prossimo aggiornamento
             logger.info("Prossimo aggiornamento tra %s secondi", UPDATE_INTERVAL)
-            time.sleep(UPDATE_INTERVAL)
+            shutdown_event.wait(UPDATE_INTERVAL)
 
         except KeyboardInterrupt:
-            logger.info("Uscita... pulisco il display")
-            display.cleanup()
-            break
+            logger.info("Uscita... pulisco il display (KeyboardInterrupt)")
+            shutdown_event.set()
         except Exception:
             logger.exception("Errore nel loop principale")
-            time.sleep(60)  # Riprova tra 1 minuto in caso di errore
+            shutdown_event.wait(60)  # Riprova tra 1 minuto in caso di errore
+
+    # Cleanup finale al termine del loop
+    logger.info("Pulisco il display in uscita...")
+    display.cleanup()
 
 if __name__ == "__main__":
     main()
