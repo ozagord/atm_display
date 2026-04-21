@@ -425,6 +425,7 @@ class DisplayManager:
     
     def __init__(self):
         self.epd = None
+        self.epdconfig = None
         self.update_counter = 0
 
     def initialize(self):
@@ -432,11 +433,13 @@ class DisplayManager:
         import sys
         sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib")
         try:
-            from waveshare_epd import epd7in5_V2 # type: ignore
+            from waveshare_epd import epd7in5_V2, epdconfig # type: ignore
             self.epd = epd7in5_V2.EPD()
+            self.epdconfig = epdconfig
             logger.info("Display EPD inizializzato")
         except ImportError:
             logger.warning("Libreria waveshare_epd non trovata. Salvo su file locale per test.")
+            self.epdconfig = None
 
     def update(self, image):
         """Aggiorna il display e-paper e gestisce il refresh completo."""
@@ -455,6 +458,10 @@ class DisplayManager:
             self.epd.init_part()
             self.epd.display_Partial(self.epd.getbuffer(image), 0, 0, self.epd.width, self.epd.height)
             self.epd.sleep()
+            
+            # Chiude esplicitamente le connessioni hardware per evitare la saturazione dei file descriptor (OSError 24)
+            if self.epdconfig:
+                self.epdconfig.module_exit()
 
             self.update_counter += 1
             logger.info("Display aggiornato (%d)", self.update_counter)
@@ -471,6 +478,8 @@ class DisplayManager:
             self.epd.init()
             self.epd.Clear()
             self.epd.sleep()
+            if self.epdconfig:
+                self.epdconfig.module_exit()
 
 # ===== MAIN LOOP =====
 
