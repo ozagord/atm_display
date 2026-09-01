@@ -7,23 +7,21 @@ Display e-paper per trasporti pubblici Milano - Piazza Ferravilla
 Richiede: Raspberry Pi + Waveshare 7.5” e-paper display
 """
 
-import io
-import shutil
-import subprocess
-import time
-import zipfile
-import signal
-import threading
-from datetime import datetime, timedelta
-from pathlib import Path
 import gc
 import logging
-from logging.handlers import RotatingFileHandler
 import re
+import shutil
+import signal
+import subprocess
+import threading
+import zipfile
+from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import pandas as pd
-import requests
 import partridge as ptg
+import requests
 from PIL import Image, ImageDraw, ImageFont
 
 # ===== CONFIGURAZIONE =====
@@ -67,18 +65,30 @@ def download_gtfs_data():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
-    response = requests.get(GTFS_URL, headers=headers, timeout=60)
-    response.raise_for_status()
 
     temp_path = GTFS_PATH.with_name(GTFS_PATH.name + "_temp")
     if temp_path.exists():
         shutil.rmtree(temp_path)
     temp_path.mkdir(parents=True, exist_ok=True)
 
-    # Estrai il contenuto dello zip in un percorso temporaneo
+    temp_zip = temp_path / "gtfs.zip"
+
+    # Streaming del download su disco per minimizzare l'uso di RAM
     try:
-        with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        with requests.get(GTFS_URL, headers=headers, timeout=60, stream=True) as r:
+            r.raise_for_status()
+            with open(temp_zip, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+        # Estrae il contenuto dello zip nel percorso temporaneo
+        with zipfile.ZipFile(temp_zip) as zf:
             zf.extractall(temp_path)
+
+        # Rimuove lo zip temporaneo
+        temp_zip.unlink(missing_ok=True)
+
     except Exception as e:
         shutil.rmtree(temp_path, ignore_errors=True)
         raise e
@@ -91,10 +101,56 @@ def download_gtfs_data():
     logger.info("Dati GTFS estratti in %s", GTFS_PATH)
 
 
+def filter_stop_times_file_python(stop_times_path: Path, target_stops, header):
+    """
+    Filtro pure Python in streaming per stop_times.txt.
+    Eseguito se grep non è disponibile o fallisce.
+    """
+    target_ids = {str(s) for s in target_stops}
+    filtered_path = stop_times_path.with_name("stop_times.filtered.txt")
+
+    try:
+        header_parts = [col.strip().strip('"').strip("'") for col in header.strip().split(',')]
+        if "stop_id" not in header_parts:
+            logger.warning("Colonna 'stop_id' non trovata in stop_times.txt")
+            return False
+
+        stop_id_idx = header_parts.index("stop_id")
+        match_count = 0
+
+        with stop_times_path.open("r", encoding="utf-8") as src, \
+             filtered_path.open("w", encoding="utf-8") as dest:
+            
+            dest.write(header)
+            src.readline()  # salta l'header
+
+            for line in src:
+                parts = line.strip().split(',')
+                if len(parts) > stop_id_idx:
+                    stop_id = parts[stop_id_idx].strip().strip('"').strip("'")
+                    if stop_id in target_ids:
+                        dest.write(line)
+                        match_count += 1
+
+        if match_count == 0:
+            logger.warning("Il filtro Python su stop_times.txt ha trovato 0 righe. File originale intatto.")
+            filtered_path.unlink(missing_ok=True)
+            return False
+
+        shutil.move(filtered_path, stop_times_path)
+        logger.info("stop_times.txt filtrato con Python: trovate %d righe", match_count)
+        return True
+
+    except Exception:
+        logger.exception("Errore durante il filtraggio Python di stop_times.txt")
+        filtered_path.unlink(missing_ok=True)
+        return False
+
+
 def filter_stop_times_file(stop_times_path: Path, target_stops):
     """
-    Usa grep per ridurre stop_times.txt alle sole righe per le fermate target.
-    Restituisce il path (eventualmente filtrato) da usare nel feed.
+    Riduce stop_times.txt alle sole righe per le fermate target.
+    Prova ad usare grep per massima velocità, altrimenti usa il fallback Python.
     """
     if not stop_times_path.exists():
         logger.warning("stop_times.txt non trovato in %s", stop_times_path.parent)
@@ -155,8 +211,9 @@ def filter_stop_times_file(stop_times_path: Path, target_stops):
             )
 
         if result.returncode not in (0, 1):
-            logger.warning("grep su stop_times.txt fallito (code %s): %s", result.returncode, result.stderr.strip())
+            logger.warning("grep su stop_times.txt fallito (code %s): %s. Provo fallback Python...", result.returncode, result.stderr.strip())
             filtered_path.unlink(missing_ok=True)
+            filter_stop_times_file_python(stop_times_path, target_stops, header)
             return stop_times_path
 
         if match_count is not None:
@@ -166,9 +223,15 @@ def filter_stop_times_file(stop_times_path: Path, target_stops):
         logger.info("stop_times.txt filtrato con grep per %d fermate target", len(target_ids))
         return stop_times_path
 
-    except Exception:
-        logger.exception("Errore durante il filtraggio di stop_times.txt")
+    except FileNotFoundError:
+        logger.warning("Comando grep non trovato. Utilizzo del fallback Python...")
         filtered_path.unlink(missing_ok=True)
+        filter_stop_times_file_python(stop_times_path, target_stops, header)
+        return stop_times_path
+    except Exception:
+        logger.exception("Errore durante il filtraggio con grep. Provo fallback Python...")
+        filtered_path.unlink(missing_ok=True)
+        filter_stop_times_file_python(stop_times_path, target_stops, header)
         return stop_times_path
 
 
@@ -273,20 +336,38 @@ def get_next_arrivals(stop_times_df, stop_map):
         return []
 
     now = datetime.now()
+    now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+
+    # Filtro vettoriale in Pandas per arrivi tra ora (0 min) e ora + 120 min (7200 secondi)
+    # Gestisce anche corse che superano le 24 ore (es. 25:00:00) nell'arco delle 2 ore successive
+    try:
+        # Nota: Partridge carica 'arrival_time' come float/int rappresentante secondi dalla mezzanotte
+        filtered_df = (
+            stop_times_df
+            .query("arrival_time >= @now_seconds")
+            .query("arrival_time <= @now_seconds + 1800")
+        )
+        # filtered_df = stop_times_df[
+        #     (stop_times_df["arrival_time"] >= now_seconds) & 
+        #     (stop_times_df["arrival_time"] <= now_seconds + 1800)
+        # ]
+    except Exception:
+        logger.exception("Errore durante il filtraggio vettoriale, utilizzo dataframe non filtrato")
+        filtered_df = stop_times_df
 
     arrivals_by_line = {}
 
-    for row in stop_times_df.itertuples(index=False):
+    for row in filtered_df.itertuples(index=False):
         sid = getattr(row, "stop_id", None)
         arrival_dt = parse_gtfs_time(getattr(row, "arrival_time", ""), now.date())
         if not arrival_dt:
             continue
         if arrival_dt < now:
-            continue  # Skip past arrivals
+            continue  # Sicurezza: salta arrivi passati
 
         minutes = int((arrival_dt - now).total_seconds() // 60)
-        if minutes > 120:
-            continue  # Don't list arrivals that far ahead
+        if minutes > 30:
+            continue  # Sicurezza: non mostrare arrivi oltre i 30 minuti
 
         def get_str(val, default=""):
             if pd.isna(val):
@@ -433,7 +514,7 @@ class DisplayManager:
         import sys
         sys.path.append("/home/utah/Downloads/e-Paper/RaspberryPi_JetsonNano/python/lib")
         try:
-            from waveshare_epd import epd7in5_V2, epdconfig # type: ignore
+            from waveshare_epd import epd7in5_V2, epdconfig  # type: ignore
             self.epd = epd7in5_V2.EPD()
             self.epdconfig = epdconfig
             logger.info("Display EPD inizializzato")
@@ -530,7 +611,14 @@ def main():
         last_download_date = datetime.now().date()
     else:
         logger.info("Dati GTFS esistenti trovati in %s", GTFS_PATH)
-        last_download_date = None  # Non sappiamo quando sono stati scaricati
+        # Recupera la data di ultima modifica del file stop_times.txt per sapere quando sono stati scaricati
+        try:
+            mtime = (GTFS_PATH / "stop_times.txt").stat().st_mtime
+            last_download_date = datetime.fromtimestamp(mtime).date()
+            logger.info("Dati GTFS caricati, ultima modifica rilevata: %s", last_download_date)
+        except Exception:
+            logger.warning("Impossibile determinare la data di ultima modifica dei dati GTFS. Impostata a None.")
+            last_download_date = None
 
     # Carica feed GTFS in memoria
     feed, service_ids_by_date, stops, stop_times_df, stop_map = load_gtfs_data()
