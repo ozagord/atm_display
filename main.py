@@ -531,18 +531,24 @@ class DisplayManager:
                 logger.info("Display dummy aggiornato (%d)", self.update_counter)
                 return
 
-            # Pulizia ogni 10 aggiornamenti (incluso il primo)
-            if self.update_counter % 10 == 0:
-                self.epd.init()
-                self.epd.Clear()
+            # Ogni init*() apre /dev/spidev senza chiudere il descrittore precedente:
+            # ogni apertura deve essere seguita da module_exit(), altrimenti il
+            # descrittore viene perso (OSError 24 dopo ~2 settimane).
+            try:
+                # Pulizia ogni 10 aggiornamenti (incluso il primo)
+                if self.update_counter % 10 == 0:
+                    self.epd.init()
+                    self.epd.Clear()
+                    if self.epdconfig:
+                        self.epdconfig.module_exit()  # chiude lo SPI aperto da init()
 
-            self.epd.init_part()
-            self.epd.display_Partial(self.epd.getbuffer(image), 0, 0, self.epd.width, self.epd.height)
-            self.epd.sleep()
-            
-            # Chiude esplicitamente le connessioni hardware per evitare la saturazione dei file descriptor (OSError 24)
-            if self.epdconfig:
-                self.epdconfig.module_exit()
+                self.epd.init_part()
+                self.epd.display_Partial(self.epd.getbuffer(image), 0, 0, self.epd.width, self.epd.height)
+                self.epd.sleep()  # chiama già module_exit()
+            finally:
+                # Garantisce la chiusura dello SPI anche in caso di errore; chiudere due volte è innocuo
+                if self.epdconfig:
+                    self.epdconfig.module_exit()
 
             self.update_counter += 1
             logger.info("Display aggiornato (%d)", self.update_counter)
